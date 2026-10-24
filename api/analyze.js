@@ -89,7 +89,7 @@ OUTPUT FORMAT:
                 "summary",
                 "strengths",
                 "missing_keywords",
-                "improvementss"
+                "improvements"
               ]
             }
           }
