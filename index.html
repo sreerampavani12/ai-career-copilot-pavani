@@ -379,23 +379,41 @@ async function analyzeResume() {
     resultsDiv.innerHTML = `<div class="error-box"><span>⚠️</span><div><strong>Content looks too short.</strong><br><span style="font-size:12px">Please use the complete resume and job description for a more useful analysis.</span></div></div>`;
     return;
   }
+  if (resume.length > 30000 || jobDescription.length > 30000 || resume.length + jobDescription.length > 50000) {
+    resultsDiv.innerHTML = `<div class="error-box"><span>⚠️</span><div><strong>Your documents are too long for one request.</strong><br><span style="font-size:12px">Please remove repeated text or extra pages and try again. Keep each document under 30,000 characters and both together under 50,000 characters.</span></div></div>`;
+    return;
+  }
 
   analyzeBtn.disabled = true;
   analyzeBtn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2px;margin:0"></span> Analyzing…';
   resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div><p style="font-weight:750">Reviewing your resume against the role…</p><p style="font-size:12px;margin-top:7px">This usually takes a few seconds.</p></div>`;
 
   try {
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resume, jobDescription, systemPrompt: SYSTEM_PROMPT })
-    });
+    // Keep the API key on the server. The browser sends only the two documents.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 65000);
+    let response;
+    try {
+      response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ resume, jobDescription }),
+        signal: controller.signal
+      });
+    } catch (networkError) {
+      if (networkError.name === "AbortError") {
+        throw new Error("The analysis took too long. Please try again with shorter documents.");
+      }
+      throw new Error("Could not reach the analysis server. Check your connection and try again.");
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     let result;
     try { result = await response.json(); }
-    catch { throw new Error("The server returned an unreadable response. Please try again."); }
+    catch { throw new Error(`The server returned an invalid response (HTTP ${response.status}). Check Vercel runtime logs.`); }
 
-    if (!response.ok) throw new Error(result.error || "Analysis failed. Check your server configuration.");
+    if (!response.ok) throw new Error(result.error || `Analysis failed (HTTP ${response.status}).`);
     const analysis = result.analysis ?? result;
 
     if (
