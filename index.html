@@ -359,6 +359,65 @@ document.getElementById("jobFile").addEventListener("change", event => {
   extractPDFText(event.target.files[0], "jobStatus", "jobFileName", "jobDesc");
 });
 
+function browserFallbackAnalysis(resume, jobDescription) {
+  // Last-resort client-side scoring if the API route itself cannot be reached.
+  const skills = [
+    "JavaScript", "TypeScript", "Python", "Java", "C++", "SQL", "MySQL", "MongoDB", "HTML", "CSS",
+    "React", "Node.js", "Spring Boot", "REST API", "Git", "GitHub", "Docker", "AWS", "OOP",
+    "Data Structures", "Algorithms", "DBMS", "Machine Learning", "Deep Learning", "Artificial Intelligence",
+    "TensorFlow", "PyTorch", "scikit-learn", "Pandas", "NumPy", "Power BI", "Tableau", "Excel",
+    "Data Analysis", "Data Visualization", "Statistics", "Flutter", "Dart", "Firebase", "Communication",
+    "Problem-solving", "Linux", "Testing", "Debugging", "Agile", "Cybersecurity", "Networking"
+  ];
+  const contains = (text, term) => {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    return new RegExp("(^|[^a-z0-9+#.])" + escaped + "($|[^a-z0-9+#.])", "i").test(text);
+  };
+  const required = skills.filter(skill => contains(jobDescription, skill));
+  const matched = required.filter(skill => contains(resume, skill));
+  const missing = required.filter(skill => !contains(resume, skill));
+  const coverage = required.length ? matched.length / required.length : 0;
+  const skillPoints = Math.round(40 * coverage);
+  const hasProjects = /projects?/i.test(resume);
+  const hasExperience = /experience|internship|employment|work history/i.test(resume);
+  const practicalPoints = Math.min(25, (hasProjects ? 10 : 0) + (hasExperience ? 7 : 0) +
+    Math.round(8 * (required.length ? matched.filter(skill => contains((resume.match(/(?:projects?|experience|internship)[\s\S]{0,900}/i) || [""])[0], skill)).length / required.length : 0)));
+  const hasEducation = /education|b\.?tech|bachelor|degree|university|college|b\.?sc|b\.?e\.|master|diploma/i.test(resume);
+  const educationPoints = hasEducation ? 12 : 0;
+  const verbs = ["develop", "design", "analyze", "analyse", "maintain", "implement", "build", "test", "debug", "collaborate", "deploy", "manage"];
+  const jobVerbs = verbs.filter(word => jobDescription.toLowerCase().includes(word));
+  const alignmentPoints = Math.round(15 * (jobVerbs.length ? jobVerbs.filter(word => resume.toLowerCase().includes(word)).length / jobVerbs.length : coverage));
+  const clarityPoints = [/[@]/.test(resume), /education|b\.?tech|bachelor|degree|college|university/i.test(resume),
+    /skills|technologies|technical/i.test(resume), /projects?|experience|internship/i.test(resume),
+    /summary|objective|profile/i.test(resume)].filter(Boolean).length;
+  const score = Math.max(0, Math.min(100, skillPoints + practicalPoints + educationPoints + alignmentPoints + clarityPoints));
+  const strengths = [];
+  if (matched.length) strengths.push("Matching skills found: " + matched.slice(0, 6).join(", ") + ".");
+  if (hasProjects) strengths.push("The resume includes a projects section.");
+  if (hasExperience) strengths.push("The resume includes experience or internship information.");
+  if (hasEducation) strengths.push("The resume includes education or qualification information.");
+  if (strengths.length < 1) strengths.push("Add clear skills, education, and project evidence so the role match can be assessed more reliably.");
+  const improvements = [];
+  if (missing.length) improvements.push("Review these job-description skills and include them only if you genuinely have them: " + missing.slice(0, 5).join(", ") + ".");
+  if (!hasProjects) improvements.push("Add relevant projects, tools used, and your own contribution.");
+  if (!hasExperience) improvements.push("Include relevant internship, practical, or coursework experience if applicable.");
+  if (!hasEducation) improvements.push("Add your education and field of study.");
+  if (improvements.length < 3) improvements.push("Tailor project and experience bullets to the role, using truthful examples and outcomes.");
+  return {
+    ats_score: score,
+    summary: "Fallback estimate based on text matching: " + matched.length + " of " + required.length +
+      " detected job-related skills matched. Component scores: skills " + skillPoints + "/40, practical evidence " +
+      practicalPoints + "/25, education " + educationPoints + "/15, role alignment " + alignmentPoints +
+      "/15, clarity " + clarityPoints + "/5.",
+    strengths: strengths.slice(0, 5),
+    missing_keywords: missing.slice(0, 8),
+    improvements: improvements.slice(0, 5),
+    ai_status: "fallback",
+    scoring_method: "browser fallback",
+    notice: "The analysis server could not be reached. This fallback score was calculated in your browser and AI feedback was unavailable."
+  };
+}
+
 async function analyzeResume() {
   const resume = document.getElementById("resume").value.trim();
   const jobDescription = document.getElementById("jobDesc").value.trim();
@@ -434,13 +493,25 @@ async function analyzeResume() {
       strengths: analysis.strengths.map(String),
       missing_keywords: analysis.missing_keywords.map(String),
       improvements: analysis.improvements.map(String),
+      ai_status: analysis.ai_status || "gemini",
+      scoring_method: analysis.scoring_method || "AI-assisted estimate",
+      notice: analysis.notice || "This score is an estimate, not an employer ATS result.",
       analyzedAt: new Date().toLocaleString()
     };
     displayResults(latestAnalysis);
     pdfBtn.disabled = false;
     pdfStatus.textContent = "Your report is ready to export.";
   } catch (error) {
-    resultsDiv.innerHTML = `<div class="error-box"><span style="font-size:20px">⚠️</span><div><strong>Analysis failed</strong><br><span style="font-size:12px">${escapeHTML(error.message)}<br><br>Please check your connection and make sure your Vercel backend and GEMINI_API_KEY are configured.</span></div></div>`;
+    // If the Vercel route itself cannot be reached, calculate a transparent browser fallback.
+    // This prevents a temporary network/API outage from blocking the ATS-style estimate.
+    const fallback = browserFallbackAnalysis(resume, jobDescription);
+    latestAnalysis = {
+      ...fallback,
+      analyzedAt: new Date().toLocaleString()
+    };
+    displayResults(latestAnalysis);
+    pdfBtn.disabled = false;
+    pdfStatus.textContent = "Fallback report ready. AI feedback may be unavailable until the connection recovers.";
   } finally {
     analyzeBtn.disabled = false;
     analyzeBtn.innerHTML = "✨ Analyze My Career";
@@ -496,7 +567,7 @@ function displayResults(analysis) {
         <ul class="insight-list improvement-list">${improvements || "<li>No improvements were returned.</li>"}</ul>
       </div>
     </div>
-    <div class="next-steps"><strong>Next step:</strong> Use these recommendations to make accurate, evidence-based improvements. This score is an estimate, not an actual employer ATS result or a guarantee of selection.</div>
+    <div class="next-steps"><strong>${analysis.ai_status === "fallback" ? "Fallback score:" : "Next step:"}</strong> ${escapeHTML(analysis.notice || "Use these recommendations to make accurate, evidence-based improvements.")} This score is an estimate, not an actual employer ATS result or a guarantee of selection.</div>
   `;
   resultsDiv.scrollIntoView({ behavior: "smooth", block: "start" });
 }
